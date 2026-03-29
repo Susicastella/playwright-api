@@ -70,7 +70,6 @@ app.post('/scrape', async (req, res) => {
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
-    // 👉 primero recogemos TODOS los hoteles visibles
     let encontrados = [];
 
     for (let i = 0; i < count; i++) {
@@ -81,21 +80,29 @@ app.post('/scrape', async (req, res) => {
         .innerText()
         .catch(() => '');
 
-      const price = await hotel
+      let price = await hotel
         .locator('[data-testid="price-and-discounted-price"]')
         .innerText()
         .catch(() => '');
 
       if (!name) continue;
 
+      // 👉 limpiar precio (quitar € y texto)
+      if (price) {
+        price = price
+          .replace(/[^\d,]/g, '') // solo números y coma
+          .replace(',', '.'); // opcional: coma a punto
+      } else {
+        price = null;
+      }
+
       encontrados.push({
         nombre: name,
         nombreLower: name.toLowerCase(),
-        precio: price || null
+        precio: price
       });
     }
 
-    // 👉 ahora construimos resultado ORDENADO SIEMPRE
     let resultadoFinal = [];
 
     for (const buscado of hotelesBuscados) {
