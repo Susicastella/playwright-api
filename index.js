@@ -5,12 +5,10 @@ const app = express();
 
 app.use(express.json());
 
-// test básico
 app.get('/', (req, res) => {
   res.send('Playwright server OK');
 });
 
-// endpoint scrape
 app.post('/scrape', async (req, res) => {
   const { url } = req.body;
 
@@ -35,9 +33,7 @@ app.post('/scrape', async (req, res) => {
   let browser;
 
   try {
-    const hotelesNormalizados = hotelesBuscados.map(h =>
-      h.toLowerCase().trim()
-    );
+    const hotelesNormalizados = hotelesBuscados.map(h => h.toLowerCase().trim());
 
     browser = await chromium.launch({
       headless: true,
@@ -51,19 +47,18 @@ app.post('/scrape', async (req, res) => {
       timeout: 60000
     });
 
-    // esperar carga
     await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(8000);
 
-    // scroll para cargar resultados
-    for (let i = 0; i < 6; i++) {
-      await page.mouse.wheel(0, 3000);
-      await page.waitForTimeout(2000);
+    for (let i = 0; i < 8; i++) {
+      await page.mouse.wheel(0, 3500);
+      await page.waitForTimeout(2500);
     }
 
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
+    let nombresVistos = [];
     let resultados = [];
 
     for (let i = 0; i < count; i++) {
@@ -81,11 +76,10 @@ app.post('/scrape', async (req, res) => {
 
       if (!name) continue;
 
-      const nameLower = name.toLowerCase().trim();
+      const limpio = name.toLowerCase().trim();
+      nombresVistos.push(name);
 
-      const coincide = hotelesNormalizados.some(h =>
-        nameLower.includes(h)
-      );
+      const coincide = hotelesNormalizados.some(h => limpio.includes(h));
 
       if (coincide) {
         resultados.push({
@@ -97,10 +91,11 @@ app.post('/scrape', async (req, res) => {
 
     return res.json({
       ok: true,
-      total: resultados.length,
+      totalCardsDetectadas: count,
+      nombresVistos,
+      totalFiltrados: resultados.length,
       hoteles: resultados
     });
-
   } catch (error) {
     return res.status(500).json({
       ok: false,
