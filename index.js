@@ -40,28 +40,42 @@ app.post('/scrape', async (req, res) => {
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    const page = await browser.newPage();
+    const context = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { width: 1366, height: 768 },
+      locale: 'es-ES'
+    });
+
+    const page = await context.newPage();
 
     await page.goto(url, {
       waitUntil: 'domcontentloaded',
       timeout: 60000
     });
 
-    await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(8000);
+    // esperar un poco
+    await page.waitForTimeout(4000);
 
+    // aceptar cookies si aparece botón
+    const btnCookies = page.locator('button:has-text("Aceptar")');
+    if (await btnCookies.count() > 0) {
+      await btnCookies.first().click().catch(() => {});
+    }
+
+    // esperar carga completa
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(6000);
+
+    // scroll para cargar hoteles
     for (let i = 0; i < 8; i++) {
       await page.mouse.wheel(0, 3500);
       await page.waitForTimeout(2500);
     }
 
-    const html = await page.content();
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
-    let nombresVistos = [];
     let resultados = [];
 
     for (let i = 0; i < count; i++) {
@@ -79,10 +93,11 @@ app.post('/scrape', async (req, res) => {
 
       if (!name) continue;
 
-      nombresVistos.push(name);
-
       const nameLower = name.toLowerCase().trim();
-      const coincide = hotelesNormalizados.some(h => nameLower.includes(h));
+
+      const coincide = hotelesNormalizados.some(h =>
+        nameLower.includes(h)
+      );
 
       if (coincide) {
         resultados.push({
@@ -94,15 +109,11 @@ app.post('/scrape', async (req, res) => {
 
     return res.json({
       ok: true,
-      urlRecibida: url,
       totalCardsDetectadas: count,
-      totalNombresVistos: nombresVistos.length,
-      nombresVistos,
       totalFiltrados: resultados.length,
-      hoteles: resultados,
-      bodyPreview: bodyText.slice(0, 1000),
-      htmlPreview: html.slice(0, 2000)
+      hoteles: resultados
     });
+
   } catch (error) {
     return res.status(500).json({
       ok: false,
