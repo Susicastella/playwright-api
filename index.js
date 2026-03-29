@@ -1,20 +1,16 @@
 const express = require('express');
+const { chromium } = require('playwright');
 
 const app = express();
 
-<<<<<<< HEAD
-=======
 app.use(express.json());
 
-// ruta básica para comprobar que funciona
->>>>>>> d93945e (update index con scrape)
+// test básico
 app.get('/', (req, res) => {
   res.send('Playwright server OK');
 });
 
-<<<<<<< HEAD
-=======
-// endpoint principal
+// endpoint scrape
 app.post('/scrape', async (req, res) => {
   const { url } = req.body;
 
@@ -36,12 +32,18 @@ app.post('/scrape', async (req, res) => {
     });
   }
 
+  let browser;
+
   try {
     const hotelesNormalizados = hotelesBuscados.map(h =>
       h.toLowerCase().trim()
     );
 
-    const browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
     const page = await browser.newPage();
 
     await page.goto(url, {
@@ -49,10 +51,11 @@ app.post('/scrape', async (req, res) => {
       timeout: 60000
     });
 
+    // esperar carga
     await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
 
-    // scroll para cargar más resultados
+    // scroll para cargar resultados
     for (let i = 0; i < 6; i++) {
       await page.mouse.wheel(0, 3000);
       await page.waitForTimeout(2000);
@@ -80,8 +83,8 @@ app.post('/scrape', async (req, res) => {
 
       const nameLower = name.toLowerCase().trim();
 
-      const coincide = hotelesNormalizados.some(hotelBuscado =>
-        nameLower.includes(hotelBuscado)
+      const coincide = hotelesNormalizados.some(h =>
+        nameLower.includes(h)
       );
 
       if (coincide) {
@@ -91,8 +94,6 @@ app.post('/scrape', async (req, res) => {
         });
       }
     }
-
-    await browser.close();
 
     return res.json({
       ok: true,
@@ -105,17 +106,15 @@ app.post('/scrape', async (req, res) => {
       ok: false,
       error: error.message
     });
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 });
 
->>>>>>> d93945e (update index con scrape)
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
-<<<<<<< HEAD
-  console.log(`Server listening on ${PORT}`);
-});
-=======
   console.log(`Server running on ${PORT}`);
 });
->>>>>>> d93945e (update index con scrape)
