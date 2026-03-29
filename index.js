@@ -55,6 +55,9 @@ app.post('/scrape', async (req, res) => {
       await page.waitForTimeout(2500);
     }
 
+    const html = await page.content();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
@@ -76,10 +79,10 @@ app.post('/scrape', async (req, res) => {
 
       if (!name) continue;
 
-      const limpio = name.toLowerCase().trim();
       nombresVistos.push(name);
 
-      const coincide = hotelesNormalizados.some(h => limpio.includes(h));
+      const nameLower = name.toLowerCase().trim();
+      const coincide = hotelesNormalizados.some(h => nameLower.includes(h));
 
       if (coincide) {
         resultados.push({
@@ -91,10 +94,14 @@ app.post('/scrape', async (req, res) => {
 
     return res.json({
       ok: true,
+      urlRecibida: url,
       totalCardsDetectadas: count,
+      totalNombresVistos: nombresVistos.length,
       nombresVistos,
       totalFiltrados: resultados.length,
-      hoteles: resultados
+      hoteles: resultados,
+      bodyPreview: bodyText.slice(0, 1000),
+      htmlPreview: html.slice(0, 2000)
     });
   } catch (error) {
     return res.status(500).json({
