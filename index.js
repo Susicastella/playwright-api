@@ -14,7 +14,7 @@ app.post('/scrape', async (req, res) => {
 
   const hotelesBuscados = [
     'mavi',
-    'hugo beach',
+    'hugo',
     'fin de semana',
     'clibomar',
     'tres anclas',
@@ -33,8 +33,6 @@ app.post('/scrape', async (req, res) => {
   let browser;
 
   try {
-    const hotelesNormalizados = hotelesBuscados.map(h => h.toLowerCase().trim());
-
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -54,20 +52,16 @@ app.post('/scrape', async (req, res) => {
       timeout: 60000
     });
 
-    // esperar un poco
     await page.waitForTimeout(4000);
 
-    // aceptar cookies si aparece botón
     const btnCookies = page.locator('button:has-text("Aceptar")');
     if (await btnCookies.count() > 0) {
       await btnCookies.first().click().catch(() => {});
     }
 
-    // esperar carga completa
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(6000);
 
-    // scroll para cargar hoteles
     for (let i = 0; i < 8; i++) {
       await page.mouse.wheel(0, 3500);
       await page.waitForTimeout(2500);
@@ -76,7 +70,8 @@ app.post('/scrape', async (req, res) => {
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
-    let resultados = [];
+    // 👉 primero recogemos TODOS los hoteles visibles
+    let encontrados = [];
 
     for (let i = 0; i < count; i++) {
       const hotel = hotels.nth(i);
@@ -93,25 +88,32 @@ app.post('/scrape', async (req, res) => {
 
       if (!name) continue;
 
-      const nameLower = name.toLowerCase().trim();
+      encontrados.push({
+        nombre: name,
+        nombreLower: name.toLowerCase(),
+        precio: price || null
+      });
+    }
 
-      const coincide = hotelesNormalizados.some(h =>
-        nameLower.includes(h)
+    // 👉 ahora construimos resultado ORDENADO SIEMPRE
+    let resultadoFinal = [];
+
+    for (const buscado of hotelesBuscados) {
+      const encontrado = encontrados.find(h =>
+        h.nombreLower.includes(buscado)
       );
 
-      if (coincide) {
-        resultados.push({
-          nombre: name,
-          precio: price || null
-        });
-      }
+      resultadoFinal.push({
+        hotel: buscado,
+        nombre: encontrado ? encontrado.nombre : buscado,
+        precio: encontrado ? encontrado.precio : null
+      });
     }
 
     return res.json({
       ok: true,
       totalCardsDetectadas: count,
-      totalFiltrados: resultados.length,
-      hoteles: resultados
+      hoteles: resultadoFinal
     });
 
   } catch (error) {
