@@ -2,7 +2,6 @@ const express = require('express');
 const { chromium } = require('playwright');
 
 const app = express();
-
 app.use(express.json());
 
 app.get('/', (req, res) => {
@@ -31,6 +30,51 @@ app.post('/scrape', async (req, res) => {
   }
 
   let browser;
+
+  const limpiarPrecio = (texto) => {
+    if (!texto) return null;
+    const limpio = String(texto)
+      .replace(/\s+/g, ' ')
+      .replace(/[^\d,.-]/g, '')
+      .replace(',', '.')
+      .trim();
+    return limpio || null;
+  };
+
+  const normalizarNombre = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+  const extraerImporte = (obj) => {
+    if (!obj || typeof obj !== 'object') return null;
+    return (
+      obj?.userAmount?.formattedAmount ||
+      obj?.userAmount?.formattedRoundedAmount ||
+      obj?.formattedAmount ||
+      obj?.formattedRoundedAmount ||
+      obj?.amount ||
+      null
+    );
+  };
+
+  const recorrer = (value, visit, seen = new WeakSet()) => {
+    if (!value || typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+
+    visit(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) recorrer(item, visit, seen);
+      return;
+    }
+
+    for (const key of Object.keys(value)) {
+      recorrer(value[key], visit, seen);
+    }
+  };
 
   try {
     browser = await chromium.launch({
@@ -67,10 +111,58 @@ app.post('/scrape', async (req, res) => {
       await page.waitForTimeout(2500);
     }
 
+    // 1) Intentar extraer precios desde scripts / datos embebidos
+    const datosEmbebidos = await page.evaluate(() => {
+      const resultados = [];
+
+      const extraerTextoScripts = () => {
+        const scripts = Array.from(document.querySelectorAll('script'));
+        return scripts
+          .map((s) => s.textContent || '')
+          .filter(Boolean)
+          .join('\n');
+      };
+
+      const texto = extraerTextoScripts();
+
+      // Intento 1: buscar nombres de hotel cerca de priceBreakdown en texto bruto
+      // Esto no es perfecto, pero ayuda cuando Booking deja datos serializados en scripts.
+      const fragmentos = texto.split('priceBreakdown');
+
+      for (const frag of fragmentos) {
+        const trozo = frag.slice(0, 2000);
+
+        const nombreMatch =
+          trozo.match(/"name"\s*:\s*"([^"]+)"/) ||
+          trozo.match(/"title"\s*:\s*"([^"]+)"/) ||
+          trozo.match(/"hotel_name"\s*:\s*"([^"]+)"/);
+
+        const strikeMatch =
+          trozo.match(/"strikethroughPrice"\s*:\s*\{[\s\S]*?"formattedAmount"\s*:\s*"([^"]+)"/) ||
+          trozo.match(/"strikethroughPrice"\s*:\s*\{[\s\S]*?"formattedRoundedAmount"\s*:\s*"([^"]+)"/);
+
+        const headlineMatch =
+          trozo.match(/"headlinePrice"\s*:\s*\{[\s\S]*?"formattedAmount"\s*:\s*"([^"]+)"/) ||
+          trozo.match(/"headlinePrice"\s*:\s*\{[\s\S]*?"formattedRoundedAmount"\s*:\s*"([^"]+)"/);
+
+        if (nombreMatch && (strikeMatch || headlineMatch)) {
+          resultados.push({
+            nombre: nombreMatch[1],
+            precioOriginal: strikeMatch ? strikeMatch[1] : null,
+            precioActual: headlineMatch ? headlineMatch[1] : null,
+            fuente: 'script-regex'
+          });
+        }
+      }
+
+      return resultados;
+    });
+
+    // 2) Extraer desde DOM visible como respaldo
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
-    let encontrados = [];
+    const encontradosDOM = [];
 
     for (let i = 0; i < count; i++) {
       const hotel = hotels.nth(i);
@@ -80,49 +172,91 @@ app.post('/scrape', async (req, res) => {
         .innerText()
         .catch(() => '');
 
-      let price = await hotel
+      if (!name) continue;
+
+      let precioOriginalTxt = '';
+      let precioActualTxt = '';
+
+      const candidatosOriginal = [
+        '[data-testid="strikethrough-price"]',
+        '[data-testid="price-before-discount"]',
+        '[data-testid="crossedout-price"]',
+        's',
+        'del'
+      ];
+
+      for (const selector of candidatosOriginal) {
+        const loc = hotel.locator(selector).first();
+        if (await loc.count()) {
+          const txt = await loc.innerText().catch(() => '');
+          if (txt && /\d/.test(txt)) {
+            precioOriginalTxt = txt;
+            break;
+          }
+        }
+      }
+
+      precioActualTxt = await hotel
         .locator('[data-testid="price-and-discounted-price"]')
+        .first()
         .innerText()
         .catch(() => '');
 
-      if (!name) continue;
-
-      // 👉 limpiar precio (quitar € y texto)
-      if (price) {
-        price = price
-          .replace(/[^\d,]/g, '') // solo números y coma
-          .replace(',', '.'); // opcional: coma a punto
-      } else {
-        price = null;
-      }
-
-      encontrados.push({
+      encontradosDOM.push({
         nombre: name,
-        nombreLower: name.toLowerCase(),
-        precio: price
+        nombreLower: normalizarNombre(name),
+        precioOriginal: limpiarPrecio(precioOriginalTxt),
+        precioActual: limpiarPrecio(precioActualTxt),
+        precio: limpiarPrecio(precioOriginalTxt || precioActualTxt),
+        fuente: 'dom'
       });
     }
 
-    let resultadoFinal = [];
+    // 3) Normalizar datos embebidos
+    const encontradosScripts = datosEmbebidos.map((h) => ({
+      nombre: h.nombre,
+      nombreLower: normalizarNombre(h.nombre),
+      precioOriginal: limpiarPrecio(h.precioOriginal),
+      precioActual: limpiarPrecio(h.precioActual),
+      precio: limpiarPrecio(h.precioOriginal || h.precioActual),
+      fuente: h.fuente || 'script'
+    }));
+
+    // 4) Para cada hotel buscado, priorizar script sobre DOM si el script trae original
+    const resultadoFinal = [];
 
     for (const buscado of hotelesBuscados) {
-      const encontrado = encontrados.find(h =>
-        h.nombreLower.includes(buscado)
+      const buscadoNorm = normalizarNombre(buscado);
+
+      const encontradoScript = encontradosScripts.find((h) =>
+        h.nombreLower.includes(buscadoNorm)
       );
+
+      const encontradoDOM = encontradosDOM.find((h) =>
+        h.nombreLower.includes(buscadoNorm)
+      );
+
+      const elegido =
+        (encontradoScript && (encontradoScript.precioOriginal || encontradoScript.precioActual))
+          ? encontradoScript
+          : encontradoDOM || encontradoScript || null;
 
       resultadoFinal.push({
         hotel: buscado,
-        nombre: encontrado ? encontrado.nombre : buscado,
-        precio: encontrado ? encontrado.precio : null
+        nombre: elegido ? elegido.nombre : buscado,
+        precio: elegido ? elegido.precio : null,
+        precio_original: elegido ? (elegido.precioOriginal || elegido.precioActual) : null,
+        precio_actual: elegido ? elegido.precioActual : null,
+        fuente: elegido ? elegido.fuente : null
       });
     }
 
     return res.json({
       ok: true,
       totalCardsDetectadas: count,
+      encontradosScript: encontradosScripts.length,
       hoteles: resultadoFinal
     });
-
   } catch (error) {
     return res.status(500).json({
       ok: false,
