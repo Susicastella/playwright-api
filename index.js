@@ -162,6 +162,15 @@ app.post('/scrape', async (req, res) => {
     const hotels = page.locator('[data-testid="property-card"]');
     const count = await hotels.count();
 
+    if (count === 0) {
+      console.log('DIAGNOSTICO BOOKING:', JSON.stringify({
+        urlFinal: page.url(),
+        titulo: await page.title(),
+        textoInicial: (await page.locator('body').innerText()
+          .catch(() => '')).slice(0, 1000)
+      }));
+    }
+
     const encontradosDOM = [];
 
     for (let i = 0; i < count; i++) {
