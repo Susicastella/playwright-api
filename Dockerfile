@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
-
+RUN npm audit --json > /tmp/npm-audit.json; node -e "const a=require('/tmp/npm-audit.json'); for(const [n,v] of Object.entries(a.vulnerabilities || {})) console.log(n, v.severity, JSON.stringify(v.fixAvailable))"
 COPY . .
 
 CMD ["node", "index.js"]
