@@ -11,7 +11,6 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
-RUN npm audit fix
 RUN npm audit --audit-level=moderate
 COPY . .
 
