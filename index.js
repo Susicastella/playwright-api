@@ -95,7 +95,7 @@ app.post('/scrape', async (req, res) => {
       waitUntil: 'domcontentloaded',
       timeout: 60000
     });
-
+console.log('URL JUSTO DESPUES DE GOTO:', page.url());
     await page.waitForTimeout(4000);
 
     const btnCookies = page.locator('button:has-text("Aceptar")');
