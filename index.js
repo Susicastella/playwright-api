@@ -90,7 +90,7 @@ app.post('/scrape', async (req, res) => {
     });
 
     const page = await context.newPage();
-
+    console.log('URL RECIBIDA DE MAKE:', url);
     await page.goto(url, {
       waitUntil: 'domcontentloaded',
       timeout: 60000
