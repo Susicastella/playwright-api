@@ -98,11 +98,12 @@ app.post('/scrape', async (req, res) => {
 console.log('URL JUSTO DESPUES DE GOTO:', page.url());
     await page.waitForTimeout(4000);
 
-    const btnCookies = page.locator('button:has-text("Aceptar")');
-    if (await btnCookies.count() > 0) {
-      await btnCookies.first().click().catch(() => {});
-    }
+    console.log('URL ANTES DE COOKIES:', page.url());
 
+const btnCookies = page.locator('button:has-text("Aceptar")');
+if (await btnCookies.count() > 0) await btnCookies.first().click().catch(() => {});
+
+console.log('URL DESPUES DE COOKIES:', page.url());
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(6000);
 
