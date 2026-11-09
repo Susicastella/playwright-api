@@ -91,7 +91,7 @@ app.post('/scrape', async (req, res) => {
 
     const page = await context.newPage();
 
-          // Hasta 3 intentos con la URL original de Make
+              // Hasta 3 intentos con la URL original de Make
     let paginaCorrecta = false;
 
     const urlOriginal = new URL(url);
@@ -150,7 +150,6 @@ app.post('/scrape', async (req, res) => {
         }))
       });
     }
-
     const btnCookies = page.locator('button:has-text("Aceptar")');
     if (await btnCookies.count() > 0) {
       await btnCookies.first().click().catch(() => {});
