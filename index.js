@@ -91,12 +91,48 @@ app.post('/scrape', async (req, res) => {
 
     const page = await context.newPage();
 
+        // Primer intento con la URL original de Make
     await page.goto(url, {
       waitUntil: 'domcontentloaded',
-      timeout: 60000
+      timeout: 30000
     });
 
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(1500);
+
+    // Si Booking ha redirigido, hacer un segundo intento
+    if (!page.url().includes('/searchresults.')) {
+      console.log('Booking ha redirigido:', page.url());
+      console.log('Segundo intento con la URL original');
+
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+
+      await page.waitForTimeout(1500);
+
+      // Si vuelve a redirigir, devolver los ocho hoteles con null
+      if (!page.url().includes('/searchresults.')) {
+        console.log('Segundo intento fallido:', page.url());
+
+        return res.status(200).json({
+          ok: false,
+          motivo: 'Booking ha redirigido en ambos intentos',
+          totalCardsDetectadas: 0,
+          encontradosScript: 0,
+          hoteles: hotelesBuscados.map(hotel => ({
+            hotel,
+            nombre: hotel,
+            precio: null,
+            precio_original: null,
+            precio_actual: null,
+            fuente: null
+          }))
+        });
+      }
+    }
+
+    console.log('Página de resultados:', page.url());
 
     const btnCookies = page.locator('button:has-text("Aceptar")');
     if (await btnCookies.count() > 0) {
