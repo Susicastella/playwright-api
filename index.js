@@ -91,48 +91,65 @@ app.post('/scrape', async (req, res) => {
 
     const page = await context.newPage();
 
-        // Primer intento con la URL original de Make
-    await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
+          // Hasta 3 intentos con la URL original de Make
+    let paginaCorrecta = false;
 
-    await page.waitForTimeout(1500);
+    const urlOriginal = new URL(url);
+    const fechaEntrada = urlOriginal.searchParams.get('checkin');
+    const fechaSalida = urlOriginal.searchParams.get('checkout');
 
-    // Si Booking ha redirigido, hacer un segundo intento
-    if (!page.url().includes('/searchresults.')) {
-      console.log('Booking ha redirigido:', page.url());
-      console.log('Segundo intento con la URL original');
+    for (let intento = 1; intento <= 3; intento++) {
+      console.log(`BOOKING: intento ${intento} de 3`);
 
-      await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000
-      });
-
-      await page.waitForTimeout(1500);
-
-      // Si vuelve a redirigir, devolver los ocho hoteles con null
-      if (!page.url().includes('/searchresults.')) {
-        console.log('Segundo intento fallido:', page.url());
-
-        return res.status(200).json({
-          ok: false,
-          motivo: 'Booking ha redirigido en ambos intentos',
-          totalCardsDetectadas: 0,
-          encontradosScript: 0,
-          hoteles: hotelesBuscados.map(hotel => ({
-            hotel,
-            nombre: hotel,
-            precio: null,
-            precio_original: null,
-            precio_actual: null,
-            fuente: null
-          }))
+      try {
+        await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 20000
         });
+
+        // Dar un pequeño margen a posibles redirecciones
+        await page.waitForTimeout(1500);
+
+        const urlActual = page.url();
+        const paginaResultados = urlActual.includes('/searchresults.');
+
+        const actual = new URL(urlActual);
+        const fechasCorrectas =
+          (!fechaEntrada || actual.searchParams.get('checkin') === fechaEntrada) &&
+          (!fechaSalida || actual.searchParams.get('checkout') === fechaSalida);
+
+        console.log('BOOKING: URL actual:', urlActual);
+
+        if (paginaResultados && fechasCorrectas) {
+          paginaCorrecta = true;
+          console.log('BOOKING: página correcta');
+          break;
+        }
+
+        console.log('BOOKING: redirección o fechas incorrectas');
+      } catch (error) {
+        console.log('BOOKING: error de navegación:', error.message);
       }
     }
 
-    console.log('Página de resultados:', page.url());
+    if (!paginaCorrecta) {
+      console.log('BOOKING: tres intentos fallidos');
+
+      return res.status(200).json({
+        ok: false,
+        motivo: 'Booking no ha cargado la búsqueda con las fechas correctas',
+        totalCardsDetectadas: 0,
+        encontradosScript: 0,
+        hoteles: hotelesBuscados.map(hotel => ({
+          hotel,
+          nombre: hotel,
+          precio: null,
+          precio_original: null,
+          precio_actual: null,
+          fuente: null
+        }))
+      });
+    }
 
     const btnCookies = page.locator('button:has-text("Aceptar")');
     if (await btnCookies.count() > 0) {
