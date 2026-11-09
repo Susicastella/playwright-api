@@ -246,10 +246,27 @@ app.post('/scrape', async (req, res) => {
         context = await crearContexto();
         page = await context.newPage();
 
-        await page.goto(urlIntento, {
-          waitUntil: 'domcontentloaded',
-          timeout: 20000
-        });
+        console.log('BOOKING TEST: abriendo página principal');
+
+await page.goto('https://www.booking.com/', {
+  waitUntil: 'domcontentloaded',
+  timeout: 20000
+});
+
+await page.waitForTimeout(5000);
+
+console.log('BOOKING TEST: URL final:', page.url());
+console.log('BOOKING TEST: título:', await page.title());
+console.log(
+  'BOOKING TEST: campos de búsqueda:',
+  await page.locator('input').count()
+);
+
+// Continuar con la búsqueda original
+await page.goto(urlIntento, {
+  waitUntil: 'domcontentloaded',
+  timeout: 20000
+});
 
         const resultadosCargados =
           await esperarResultados(page, url);
