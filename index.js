@@ -1,26 +1,118 @@
+
 const express = require('express');
 const { chromium } = require('playwright');
 
 const app = express();
 app.use(express.json());
 
+const hotelesBuscados = [
+  'mavi',
+  'hugo',
+  'fin de semana',
+  'clibomar',
+  'tres anclas',
+  'albatros',
+  'porto',
+  'san luis'
+];
+
 app.get('/', (req, res) => {
   res.send('Playwright server OK');
 });
 
-app.post('/scrape', async (req, res) => {
-  const { url } = req.body;
+const limpiarPrecio = (texto) => {
+  if (!texto) return null;
 
-  const hotelesBuscados = [
-    'mavi',
-    'hugo',
-    'fin de semana',
-    'clibomar',
-    'tres anclas',
-    'albatros',
-    'porto',
-    'san luis'
+  const limpio = String(texto)
+    .replace(/\s+/g, ' ')
+    .replace(/[^\d,.-]/g, '')
+    .replace(',', '.')
+    .trim();
+
+  return limpio || null;
+};
+
+const normalizarNombre = (s) =>
+  String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const hotelesNulos = () =>
+  hotelesBuscados.map((hotel) => ({
+    hotel,
+    nombre: hotel,
+    precio: null,
+    precio_original: null,
+    precio_actual: null,
+    fuente: null
+  }));
+
+// Construir una URL sencilla conservando los datos de Make
+function simplificarURL(urlOriginal) {
+  const original = new URL(urlOriginal);
+
+  const nueva = new URL(
+    'https://www.booking.com/searchresults.html'
+  );
+
+  const parametros = [
+    'ss',
+    'dest_id',
+    'dest_type',
+    'checkin',
+    'checkout',
+    'group_adults',
+    'no_rooms',
+    'group_children',
+    'lang'
   ];
+
+  for (const parametro of parametros) {
+    const valor = original.searchParams.get(parametro);
+
+    if (valor !== null) {
+      nueva.searchParams.set(parametro, valor);
+    }
+  }
+
+  if (!nueva.searchParams.has('lang')) {
+    nueva.searchParams.set('lang', 'es');
+  }
+
+  return nueva.toString();
+}
+
+// Comprobar la página sin realizar las esperas largas
+async function comprobarPagina(page, urlOriginal) {
+  const original = new URL(urlOriginal);
+
+  const fechaEntrada = original.searchParams.get('checkin');
+  const fechaSalida = original.searchParams.get('checkout');
+
+  await page.waitForTimeout(1500);
+
+  const urlActual = page.url();
+  const actual = new URL(urlActual);
+
+  const esResultados =
+    actual.pathname.includes('searchresults');
+
+  const fechasCorrectas =
+    (!fechaEntrada ||
+      actual.searchParams.get('checkin') === fechaEntrada) &&
+    (!fechaSalida ||
+      actual.searchParams.get('checkout') === fechaSalida);
+
+  console.log('BOOKING: URL actual:', urlActual);
+  console.log('BOOKING: página de resultados:', esResultados);
+  console.log('BOOKING: fechas correctas:', fechasCorrectas);
+
+  return esResultados && fechasCorrectas;
+}
+
+app.post('/scrape', async (req, res) => {
+  const { url } = req.body || {};
 
   if (!url) {
     return res.status(400).json({
@@ -30,155 +122,156 @@ app.post('/scrape', async (req, res) => {
   }
 
   let browser;
+  let context;
+  let page;
+  let intentos = 0;
 
-  const limpiarPrecio = (texto) => {
-    if (!texto) return null;
-    const limpio = String(texto)
-      .replace(/\s+/g, ' ')
-      .replace(/[^\d,.-]/g, '')
-      .replace(',', '.')
-      .trim();
-    return limpio || null;
-  };
-
-  const normalizarNombre = (s) =>
-    String(s || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-  const extraerImporte = (obj) => {
-    if (!obj || typeof obj !== 'object') return null;
-    return (
-      obj?.userAmount?.formattedAmount ||
-      obj?.userAmount?.formattedRoundedAmount ||
-      obj?.formattedAmount ||
-      obj?.formattedRoundedAmount ||
-      obj?.amount ||
-      null
-    );
-  };
-
-  const recorrer = (value, visit, seen = new WeakSet()) => {
-    if (!value || typeof value !== 'object') return;
-    if (seen.has(value)) return;
-    seen.add(value);
-
-    visit(value);
-
-    if (Array.isArray(value)) {
-      for (const item of value) recorrer(item, visit, seen);
-      return;
-    }
-
-    for (const key of Object.keys(value)) {
-      recorrer(value[key], visit, seen);
-    }
-  };
+  const responderNulos = (motivo) =>
+    res.status(200).json({
+      ok: false,
+      motivo,
+      intentos,
+      totalCardsDetectadas: 0,
+      encontradosScript: 0,
+      hoteles: hotelesNulos()
+    });
 
   try {
+    const urlAlternativa = simplificarURL(url);
+
+    console.log('BOOKING: URL original:', url);
+    console.log('BOOKING: URL alternativa:', urlAlternativa);
+
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox'
+      ]
     });
 
-    const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      viewport: { width: 1366, height: 768 },
-      locale: 'es-ES'
-    });
+    const crearContexto = async () => {
+      return browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        viewport: {
+          width: 1366,
+          height: 768
+        },
+        locale: 'es-ES'
+      });
+    };
 
-    const page = await context.newPage();
+    context = await crearContexto();
+    page = await context.newPage();
 
-              // Hasta 3 intentos con la URL original de Make
     let paginaCorrecta = false;
 
-    const urlOriginal = new URL(url);
-    const fechaEntrada = urlOriginal.searchParams.get('checkin');
-    const fechaSalida = urlOriginal.searchParams.get('checkout');
-
     for (let intento = 1; intento <= 3; intento++) {
-      console.log(`BOOKING: intento ${intento} de 3`);
+      intentos = intento;
+
+      const urlIntento =
+        intento === 1 ? url : urlAlternativa;
+
+      console.log(
+        `BOOKING: intento ${intento} de 3`
+      );
 
       try {
-        await page.goto(url, {
+        // En el tercer intento, renovar la sesión,
+        // pero mantener el mismo navegador.
+        if (intento === 3) {
+          await context.close().catch(() => {});
+
+          context = await crearContexto();
+          page = await context.newPage();
+        }
+
+        await page.goto(urlIntento, {
           waitUntil: 'domcontentloaded',
           timeout: 20000
         });
 
-        // Dar un pequeño margen a posibles redirecciones
-        await page.waitForTimeout(1500);
+        paginaCorrecta = await comprobarPagina(
+          page,
+          url
+        );
 
-        const urlActual = page.url();
-        const paginaResultados = urlActual.includes('/searchresults.');
-
-        const actual = new URL(urlActual);
-        const fechasCorrectas =
-          (!fechaEntrada || actual.searchParams.get('checkin') === fechaEntrada) &&
-          (!fechaSalida || actual.searchParams.get('checkout') === fechaSalida);
-
-        console.log('BOOKING: URL actual:', urlActual);
-
-        if (paginaResultados && fechasCorrectas) {
-          paginaCorrecta = true;
-          console.log('BOOKING: página correcta');
+        if (paginaCorrecta) {
+          console.log(
+            `BOOKING: intento ${intento} correcto`
+          );
           break;
         }
 
-        console.log('BOOKING: redirección o fechas incorrectas');
+        console.log(
+          `BOOKING: intento ${intento} redirigido`
+        );
       } catch (error) {
-        console.log('BOOKING: error de navegación:', error.message);
+        console.log(
+          `BOOKING: fallo en intento ${intento}:`,
+          error.message
+        );
       }
     }
 
     if (!paginaCorrecta) {
-      console.log('BOOKING: tres intentos fallidos');
-
-      return res.status(200).json({
-        ok: false,
-        motivo: 'Booking no ha cargado la búsqueda con las fechas correctas',
-        totalCardsDetectadas: 0,
-        encontradosScript: 0,
-        hoteles: hotelesBuscados.map(hotel => ({
-          hotel,
-          nombre: hotel,
-          precio: null,
-          precio_original: null,
-          precio_actual: null,
-          fuente: null
-        }))
-      });
+      return responderNulos(
+        'Booking no ha cargado la búsqueda con las fechas correctas'
+      );
     }
-    const btnCookies = page.locator('button:has-text("Aceptar")');
+
+    // Aceptar cookies si aparece el botón
+    const btnCookies = page.locator(
+      'button:has-text("Aceptar")'
+    );
+
     if (await btnCookies.count() > 0) {
-      await btnCookies.first().click().catch(() => {});
+      await btnCookies.first()
+        .click({ timeout: 3000 })
+        .catch(() => {});
     }
 
-    await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(6000);
+    // Esperar a que aparezcan las tarjetas de hoteles
+    await page
+      .locator('[data-testid="property-card"]')
+      .first()
+      .waitFor({
+        state: 'attached',
+        timeout: 10000
+      })
+      .catch(() => {});
 
+    // Desplazarse para cargar más hoteles
     for (let i = 0; i < 8; i++) {
       await page.mouse.wheel(0, 3500);
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(1500);
     }
 
-    // 1) Intentar extraer precios desde scripts / datos embebidos
+    // Si Booking redirige después, no extraer
+    // precios de una página incorrecta.
+    const sigueCorrecta = await comprobarPagina(
+      page,
+      url
+    );
+
+    if (!sigueCorrecta) {
+      return responderNulos(
+        'Booking ha redirigido durante la carga de resultados'
+      );
+    }
+
+    // 1. Extraer precios desde scripts
     const datosEmbebidos = await page.evaluate(() => {
       const resultados = [];
 
-      const extraerTextoScripts = () => {
-        const scripts = Array.from(document.querySelectorAll('script'));
-        return scripts
-          .map((s) => s.textContent || '')
-          .filter(Boolean)
-          .join('\n');
-      };
+      const texto = Array.from(
+        document.querySelectorAll('script')
+      )
+        .map((s) => s.textContent || '')
+        .filter(Boolean)
+        .join('\n');
 
-      const texto = extraerTextoScripts();
-
-      // Intento 1: buscar nombres de hotel cerca de priceBreakdown en texto bruto
-      // Esto no es perfecto, pero ayuda cuando Booking deja datos serializados en scripts.
       const fragmentos = texto.split('priceBreakdown');
 
       for (const frag of fragmentos) {
@@ -197,11 +290,18 @@ app.post('/scrape', async (req, res) => {
           trozo.match(/"headlinePrice"\s*:\s*\{[\s\S]*?"formattedAmount"\s*:\s*"([^"]+)"/) ||
           trozo.match(/"headlinePrice"\s*:\s*\{[\s\S]*?"formattedRoundedAmount"\s*:\s*"([^"]+)"/);
 
-        if (nombreMatch && (strikeMatch || headlineMatch)) {
+        if (
+          nombreMatch &&
+          (strikeMatch || headlineMatch)
+        ) {
           resultados.push({
             nombre: nombreMatch[1],
-            precioOriginal: strikeMatch ? strikeMatch[1] : null,
-            precioActual: headlineMatch ? headlineMatch[1] : null,
+            precioOriginal: strikeMatch
+              ? strikeMatch[1]
+              : null,
+            precioActual: headlineMatch
+              ? headlineMatch[1]
+              : null,
             fuente: 'script-regex'
           });
         }
@@ -210,10 +310,12 @@ app.post('/scrape', async (req, res) => {
       return resultados;
     });
 
-    // 2) Extraer desde DOM visible como respaldo
-    const hotels = page.locator('[data-testid="property-card"]');
-    const count = await hotels.count();
+    // 2. Extraer precios desde las tarjetas visibles
+    const hotels = page.locator(
+      '[data-testid="property-card"]'
+    );
 
+    const count = await hotels.count();
     const encontradosDOM = [];
 
     for (let i = 0; i < count; i++) {
@@ -227,7 +329,6 @@ app.post('/scrape', async (req, res) => {
       if (!name) continue;
 
       let precioOriginalTxt = '';
-      let precioActualTxt = '';
 
       const candidatosOriginal = [
         '[data-testid="strikethrough-price"]',
@@ -239,8 +340,12 @@ app.post('/scrape', async (req, res) => {
 
       for (const selector of candidatosOriginal) {
         const loc = hotel.locator(selector).first();
+
         if (await loc.count()) {
-          const txt = await loc.innerText().catch(() => '');
+          const txt = await loc
+            .innerText()
+            .catch(() => '');
+
           if (txt && /\d/.test(txt)) {
             precioOriginalTxt = txt;
             break;
@@ -248,8 +353,10 @@ app.post('/scrape', async (req, res) => {
         }
       }
 
-      precioActualTxt = await hotel
-        .locator('[data-testid="price-and-discounted-price"]')
+      const precioActualTxt = await hotel
+        .locator(
+          '[data-testid="price-and-discounted-price"]'
+        )
         .first()
         .innerText()
         .catch(() => '');
@@ -257,63 +364,115 @@ app.post('/scrape', async (req, res) => {
       encontradosDOM.push({
         nombre: name,
         nombreLower: normalizarNombre(name),
-        precioOriginal: limpiarPrecio(precioOriginalTxt),
-        precioActual: limpiarPrecio(precioActualTxt),
-        precio: limpiarPrecio(precioOriginalTxt || precioActualTxt),
+        precioOriginal: limpiarPrecio(
+          precioOriginalTxt
+        ),
+        precioActual: limpiarPrecio(
+          precioActualTxt
+        ),
+        precio: limpiarPrecio(
+          precioOriginalTxt || precioActualTxt
+        ),
         fuente: 'dom'
       });
     }
 
-    // 3) Normalizar datos embebidos
-    const encontradosScripts = datosEmbebidos.map((h) => ({
-      nombre: h.nombre,
-      nombreLower: normalizarNombre(h.nombre),
-      precioOriginal: limpiarPrecio(h.precioOriginal),
-      precioActual: limpiarPrecio(h.precioActual),
-      precio: limpiarPrecio(h.precioOriginal || h.precioActual),
-      fuente: h.fuente || 'script'
-    }));
+    // 3. Normalizar datos de scripts
+    const encontradosScripts = datosEmbebidos.map(
+      (h) => ({
+        nombre: h.nombre,
+        nombreLower: normalizarNombre(h.nombre),
+        precioOriginal: limpiarPrecio(
+          h.precioOriginal
+        ),
+        precioActual: limpiarPrecio(
+          h.precioActual
+        ),
+        precio: limpiarPrecio(
+          h.precioOriginal || h.precioActual
+        ),
+        fuente: h.fuente || 'script'
+      })
+    );
 
-    // 4) Para cada hotel buscado, priorizar script sobre DOM si el script trae original
+    // 4. Priorizar precio original tachado
     const resultadoFinal = [];
 
     for (const buscado of hotelesBuscados) {
-      const buscadoNorm = normalizarNombre(buscado);
-
-      const encontradoScript = encontradosScripts.find((h) =>
-        h.nombreLower.includes(buscadoNorm)
+      const buscadoNorm = normalizarNombre(
+        buscado
       );
 
-      const encontradoDOM = encontradosDOM.find((h) =>
-        h.nombreLower.includes(buscadoNorm)
-      );
+      const encontradoScript =
+        encontradosScripts.find((h) =>
+          h.nombreLower.includes(buscadoNorm)
+        );
+
+      const encontradoDOM =
+        encontradosDOM.find((h) =>
+          h.nombreLower.includes(buscadoNorm)
+        );
 
       const elegido =
-        (encontradoScript && (encontradoScript.precioOriginal || encontradoScript.precioActual))
+        (
+          encontradoScript &&
+          (
+            encontradoScript.precioOriginal ||
+            encontradoScript.precioActual
+          )
+        )
           ? encontradoScript
           : encontradoDOM || encontradoScript || null;
 
       resultadoFinal.push({
         hotel: buscado,
-        nombre: elegido ? elegido.nombre : buscado,
-        precio: elegido ? elegido.precio : null,
-        precio_original: elegido ? (elegido.precioOriginal || elegido.precioActual) : null,
-        precio_actual: elegido ? elegido.precioActual : null,
-        fuente: elegido ? elegido.fuente : null
+        nombre: elegido
+          ? elegido.nombre
+          : buscado,
+        precio: elegido
+          ? elegido.precio
+          : null,
+        precio_original: elegido
+          ? (
+              elegido.precioOriginal ||
+              elegido.precioActual
+            )
+          : null,
+        precio_actual: elegido
+          ? elegido.precioActual
+          : null,
+        fuente: elegido
+          ? elegido.fuente
+          : null
       });
     }
 
-    return res.json({
+    console.log(
+      'BOOKING: tarjetas detectadas:',
+      count
+    );
+
+    console.log(
+      'BOOKING: hoteles con precio:',
+      resultadoFinal.filter((h) => h.precio).length
+    );
+
+    return res.status(200).json({
       ok: true,
+      intentos,
       totalCardsDetectadas: count,
       encontradosScript: encontradosScripts.length,
       hoteles: resultadoFinal
     });
+
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+    console.error(
+      'BOOKING: error general:',
+      error.message
+    );
+
+    return responderNulos(error.message);
+
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
