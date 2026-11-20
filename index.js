@@ -48,10 +48,8 @@ const hotelesNulos = () =>
     fuente: null
   }));
 
-// Construir URL alternativa sin parámetros publicitarios
 function simplificarURL(urlOriginal) {
   const original = new URL(urlOriginal);
-
   const nueva = new URL(
     'https://www.booking.com/searchresults.html'
   );
@@ -70,7 +68,6 @@ function simplificarURL(urlOriginal) {
 
   for (const parametro of parametros) {
     const valor = original.searchParams.get(parametro);
-
     if (valor !== null) {
       nueva.searchParams.set(parametro, valor);
     }
@@ -83,7 +80,6 @@ function simplificarURL(urlOriginal) {
   return nueva.toString();
 }
 
-// Verificar que seguimos en los resultados correctos
 function verificarURL(urlActual, urlOriginal) {
   try {
     const original = new URL(urlOriginal);
@@ -92,13 +88,11 @@ function verificarURL(urlActual, urlOriginal) {
     const esResultados =
       actual.pathname.includes('searchresults');
 
-    const fechaEntrada = original.searchParams.get(
-      'checkin'
-    );
+    const fechaEntrada =
+      original.searchParams.get('checkin');
 
-    const fechaSalida = original.searchParams.get(
-      'checkout'
-    );
+    const fechaSalida =
+      original.searchParams.get('checkout');
 
     const fechasCorrectas =
       (!fechaEntrada ||
@@ -114,54 +108,60 @@ function verificarURL(urlActual, urlOriginal) {
   }
 }
 
-// Esperar a que haya resultados reales y estables
-async function esperarResultados(page, urlOriginal) {
+// Comprobar si la navegación se resuelve sola.
+// No intenta superar ni modificar desafíos de seguridad.
+async function esperarNavegacion(page, urlOriginal, tiempoMaximo) {
   const inicio = Date.now();
-  const tiempoMaximo = 12000;
-
   let primeraDeteccion = null;
+  let ultimaURL = '';
 
   while (Date.now() - inicio < tiempoMaximo) {
     const urlActual = page.url();
 
-    if (!verificarURL(urlActual, urlOriginal)) {
+    if (urlActual !== ultimaURL) {
       console.log(
-        'BOOKING: redirección detectada:',
+        'BOOKING NAVEGACION: URL:',
         urlActual
       );
-
-      return false;
+      ultimaURL = urlActual;
+      primeraDeteccion = null;
     }
 
-    const tarjetas = await page
-      .locator('[data-testid="property-card"]')
-      .count()
-      .catch(() => 0);
+    if (verificarURL(urlActual, urlOriginal)) {
+      const tarjetas = await page
+        .locator('[data-testid="property-card"]')
+        .count()
+        .catch(() => 0);
 
-    if (tarjetas > 0) {
-      if (primeraDeteccion === null) {
-        primeraDeteccion = Date.now();
+      if (tarjetas > 0) {
+        if (primeraDeteccion === null) {
+          primeraDeteccion = Date.now();
+        }
+
+        if (Date.now() - primeraDeteccion >= 3000) {
+          console.log(
+            'BOOKING: resultados estables:',
+            tarjetas
+          );
+          return true;
+        }
+      } else {
+        primeraDeteccion = null;
       }
-
-      // Mantener la página correcta durante
-      // unos segundos antes de darla por válida.
-      if (Date.now() - primeraDeteccion >= 3000) {
-        console.log(
-          'BOOKING: resultados estables:',
-          tarjetas
-        );
-
-        return true;
-      }
-    } else {
-      primeraDeteccion = null;
     }
 
     await page.waitForTimeout(500);
   }
 
   console.log(
-    'BOOKING: no se obtuvieron resultados estables'
+    'BOOKING NAVEGACION: sin resultados tras',
+    tiempoMaximo,
+    'ms'
+  );
+
+  console.log(
+    'BOOKING NAVEGACION: URL final:',
+    page.url()
   );
 
   return false;
@@ -209,7 +209,6 @@ app.post('/scrape', async (req, res) => {
       ]
     });
 
-    // Usar el userAgent predeterminado de Playwright
     const crearContexto = async () =>
       browser.newContext({
         viewport: {
@@ -224,7 +223,7 @@ app.post('/scrape', async (req, res) => {
     let encontradosScriptCantidad = 0;
     let exito = false;
 
-    // Tres intentos secuenciales, nunca simultáneos
+    // Tres intentos secuenciales
     for (let intento = 1; intento <= 3; intento++) {
       intentos = intento;
 
@@ -236,8 +235,6 @@ app.post('/scrape', async (req, res) => {
       );
 
       try {
-        // Cada intento tiene un contexto limpio,
-        // pero todos usan el mismo navegador.
         if (context) {
           await context.close().catch(() => {});
         }
@@ -245,8 +242,6 @@ app.post('/scrape', async (req, res) => {
         context = await crearContexto();
         page = await context.newPage();
 
-        // Diagnóstico temporal:
-        // registrar respuestas y navegaciones de Booking.
         const respuestasBooking = [];
         const navegacionesBooking = [];
 
@@ -281,92 +276,75 @@ app.post('/scrape', async (req, res) => {
           timeout: 20000
         });
 
+        const estadoInicial = respuesta
+          ? respuesta.status()
+          : null;
+
         console.log(
           'BOOKING DEBUG: estado inicial:',
-          respuesta
-            ? respuesta.status()
-            : 'sin respuesta'
+          estadoInicial ?? 'sin respuesta'
         );
 
-        
-if (respuesta && respuesta.status() === 202) {
-  const html202 = await respuesta.text()
-    .catch(() => '');
-
-  const texto202 = html202.toLowerCase();
-
-  console.log(
-    'BOOKING DEBUG 202: longitud:',
-    html202.length
-  );
-
-  console.log(
-    'BOOKING DEBUG 202: contiene challenge:',
-    texto202.includes('challenge')
-  );
-
-  console.log(
-    'BOOKING DEBUG 202: contiene captcha:',
-    texto202.includes('captcha')
-  );
-
-  console.log(
-    'BOOKING DEBUG 202: contiene redirect:',
-    texto202.includes('redirect')
-  );
-
-  console.log(
-    'BOOKING DEBUG 202: contiene bot:',
-    texto202.includes('bot')
-  );
-
-  console.log(
-    'BOOKING DEBUG 202: título HTML:',
-    html202.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-      ?.trim()
-      .slice(0, 150) || 'sin título'
-  );
-}
-
-
-        await page.waitForTimeout(3000);
+        const cuerpoInicial = respuesta
+          ? await respuesta.body()
+              .catch(() => Buffer.alloc(0))
+          : Buffer.alloc(0);
 
         console.log(
-          'BOOKING DEBUG: URL tras 3 segundos:',
+          'BOOKING DEBUG: bytes respuesta inicial:',
+          cuerpoInicial.length
+        );
+
+        if (estadoInicial === 202) {
+          const html = cuerpoInicial.toString('utf8');
+          const texto = html.toLowerCase();
+
+          console.log(
+            'BOOKING DEBUG 202: challenge:',
+            texto.includes('challenge')
+          );
+
+          console.log(
+            'BOOKING DEBUG 202: bot:',
+            texto.includes('bot')
+          );
+
+          console.log(
+            'BOOKING DEBUG 202: captcha:',
+            texto.includes('captcha')
+          );
+        }
+
+        // PRUEBA NUEVA:
+        // Esperar hasta 15 segundos para comprobar
+        // si Booking completa la navegación normalmente.
+        // No se interviene en la verificación.
+        const resultadosCargados =
+          await esperarNavegacion(
+            page,
+            url,
+            estadoInicial === 202 ? 15000 : 12000
+          );
+
+        console.log(
+          'BOOKING DEBUG: URL final:',
           page.url()
         );
 
         console.log(
-          'BOOKING DEBUG: título:',
-          await page.title()
-            .catch(() => 'sin título')
-        );
-
-        console.log(
-          'BOOKING DEBUG: tarjetas:',
-          await page
-            .locator('[data-testid="property-card"]')
-            .count()
-            .catch(() => 0)
+          'BOOKING DEBUG: título final:',
+          await page.title().catch(() => 'sin título')
         );
 
         console.log(
           'BOOKING DEBUG: respuestas:',
-          JSON.stringify(
-            respuestasBooking.slice(-15)
-          )
+          JSON.stringify(respuestasBooking.slice(-15))
         );
 
         console.log(
           'BOOKING DEBUG: navegaciones:',
-          JSON.stringify(
-            navegacionesBooking.slice(-10)
-          )
+          JSON.stringify(navegacionesBooking.slice(-10))
         );
-
-        // Declarar resultadosCargados una sola vez
-        const resultadosCargados =
-          await esperarResultados(page, url);
 
         if (!resultadosCargados) {
           console.log(
@@ -505,9 +483,7 @@ if (respuesta && respuesta.status() === 202) {
           ];
 
           for (const selector of candidatosOriginal) {
-            const loc = hotel
-              .locator(selector)
-              .first();
+            const loc = hotel.locator(selector).first();
 
             if (await loc.count()) {
               const txt = await loc
@@ -545,7 +521,6 @@ if (respuesta && respuesta.status() === 202) {
           });
         }
 
-        // Comprobación final antes de aceptar precios
         if (!verificarURL(page.url(), url)) {
           console.log(
             'BOOKING: redirección durante extracción'
@@ -683,4 +658,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on ${PORT}`);
 });
-
