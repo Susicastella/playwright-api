@@ -246,10 +246,86 @@ app.post('/scrape', async (req, res) => {
         context = await crearContexto();
         page = await context.newPage();
 
-      const respuesta = await page.goto(urlIntento, {
+   
+const respuestasBooking = [];
+const navegacionesBooking = [];
+
+const registrarRespuesta = (response) => {
+  if (!response.url().includes('booking.com')) return;
+
+  if (
+    response.request().isNavigationRequest() ||
+    [202, 403, 429].includes(response.status())
+  ) {
+    respuestasBooking.push({
+      estado: response.status(),
+      url: response.url().slice(0, 250),
+      navegacion: response.request().isNavigationRequest()
+    });
+  }
+};
+
+const registrarNavegacion = (frame) => {
+  if (frame === page.mainFrame()) {
+    navegacionesBooking.push(frame.url().slice(0, 250));
+  }
+};
+
+page.on('response', registrarRespuesta);
+page.on('framenavigated', registrarNavegacion);
+
+const respuesta = await page.goto(urlIntento, {
   waitUntil: 'domcontentloaded',
   timeout: 20000
 });
+
+console.log(
+  'BOOKING DEBUG: estado inicial:',
+  respuesta?.status() ?? 'sin respuesta'
+);
+
+console.log(
+  'BOOKING DEBUG: bytes respuesta inicial:',
+  respuesta
+    ? (await respuesta.body().catch(() => Buffer.alloc(0))).length
+    : 0
+);
+
+await page.waitForTimeout(3000);
+
+console.log(
+  'BOOKING DEBUG: URL tras 3 segundos:',
+  page.url()
+);
+
+console.log(
+  'BOOKING DEBUG: título:',
+  await page.title().catch(() => 'sin título')
+);
+
+console.log(
+  'BOOKING DEBUG: tarjetas:',
+  await page.locator('[data-testid="property-card"]')
+    .count()
+    .catch(() => 0)
+);
+
+console.log(
+  'BOOKING DEBUG: respuestas:',
+  JSON.stringify(respuestasBooking.slice(-15))
+);
+
+console.log(
+  'BOOKING DEBUG: navegaciones:',
+  JSON.stringify(navegacionesBooking.slice(-10))
+);
+
+page.off('response', registrarRespuesta);
+page.off('framenavigated', registrarNavegacion);
+
+const resultadosCargados =
+  await esperarResultados(page, url);
+
 
 // Diagnóstico temporal de Booking
 console.log(
