@@ -246,14 +246,44 @@ app.post('/scrape', async (req, res) => {
         context = await crearContexto();
         page = await context.newPage();
 
-       await page.goto(urlIntento, {
+      const respuesta = await page.goto(urlIntento, {
   waitUntil: 'domcontentloaded',
   timeout: 20000
 });
 
-        const resultadosCargados =
-          await esperarResultados(page, url);
+// Diagnóstico temporal de Booking
+console.log(
+  'BOOKING DEBUG: estado HTTP:',
+  respuesta ? respuesta.status() : 'sin respuesta'
+);
 
+console.log(
+  'BOOKING DEBUG: URL final:',
+  page.url()
+);
+
+console.log(
+  'BOOKING DEBUG: título:',
+  await page.title().catch(() => 'sin título')
+);
+
+console.log(
+  'BOOKING DEBUG: tarjetas:',
+  await page.locator('[data-testid="property-card"]')
+    .count()
+    .catch(() => 0)
+);
+
+console.log(
+  'BOOKING DEBUG: texto inicial:',
+  (await page.locator('body')
+    .innerText()
+    .catch(() => ''))
+    .slice(0, 500)
+);
+
+const resultadosCargados =
+  await esperarResultados(page, url);
         if (!resultadosCargados) {
           console.log(
             `BOOKING: intento ${intento} fallido`
