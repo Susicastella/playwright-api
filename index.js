@@ -288,15 +288,46 @@ app.post('/scrape', async (req, res) => {
             : 'sin respuesta'
         );
 
-        console.log(
-          'BOOKING DEBUG: bytes respuesta inicial:',
-          respuesta
-            ? (
-                await respuesta.body()
-                  .catch(() => Buffer.alloc(0))
-              ).length
-            : 0
-        );
+        
+if (respuesta && respuesta.status() === 202) {
+  const html202 = await respuesta.text()
+    .catch(() => '');
+
+  const texto202 = html202.toLowerCase();
+
+  console.log(
+    'BOOKING DEBUG 202: longitud:',
+    html202.length
+  );
+
+  console.log(
+    'BOOKING DEBUG 202: contiene challenge:',
+    texto202.includes('challenge')
+  );
+
+  console.log(
+    'BOOKING DEBUG 202: contiene captcha:',
+    texto202.includes('captcha')
+  );
+
+  console.log(
+    'BOOKING DEBUG 202: contiene redirect:',
+    texto202.includes('redirect')
+  );
+
+  console.log(
+    'BOOKING DEBUG 202: contiene bot:',
+    texto202.includes('bot')
+  );
+
+  console.log(
+    'BOOKING DEBUG 202: título HTML:',
+    html202.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      ?.trim()
+      .slice(0, 150) || 'sin título'
+  );
+}
+
 
         await page.waitForTimeout(3000);
 
